@@ -1,0 +1,240 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'BN, Sept 17, 2019
+'This project will generate Serial numbers at Shop Floor Control > File > Work Orders > New > Save > Schedule FWD/BWD > Save > Manual Enter Serial number
+'The Job Header Part must be flagged Serialize at Inventory Master
+'This Company Option needs to be turned on for this project to work: Standard > Manufactoring > Attach Manual Serial Numbers Only
+
+'Serial Pattern: XXXXXXX-YY-WW-####
+'1/Supplier Code (XXXXXXX): User Defined 1 field from Inventory Master
+'2/Calendar Year (YY): Last two digits of WO created date
+'3/Calendar Week (WW): Numeric week when WO created date
+
+F.Intrinsic.Control.Try
+	V.Local.sError.Declare
+
+	'Shop Floor Control > File > Work Orders > New > Save > Schedule FWD/BWD > Save > Manual Enter Serial number
+	f.Intrinsic.Control.If(v.Caller.Hook,=,31825)
+		F.ODBC.Connection!Conx.OpenCompanyConnection
+		F.Intrinsic.Control.CallSub("Generate_Serial_Number")
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.CallSub("Unload")	
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+		F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}","GCG_5072_Serial.g2u",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+		F.Intrinsic.Control.CallSub("Unload")
+	F.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.Get_Current_Week_Number.Start
+f.Intrinsic.Control.Try	
+	v.Local.sError.Declare
+	v.Local.iCurrentYear.Declare
+	v.Local.dFirstDate.Declare
+	v.Local.sHold.Declare
+	v.Local.iCurrentWeek.Declare
+	v.Local.iWeekDayofFirstDay.Declare
+	v.Local.iHold.Declare
+	v.Local.dFirstWeek.Declare
+	
+	'Get the first date of the year
+	f.Intrinsic.Date.Year(v.Ambient.Date,v.Local.iCurrentYear)
+	f.Intrinsic.String.Build("01/01/{0}",v.Local.iCurrentYear,v.Local.sHold)	
+	v.Local.dFirstDate.Set(v.Local.sHold)
+	'Get the first date of the first week of the year
+	f.Intrinsic.Date.Weekday(v.Local.dFirstDate,v.Local.iWeekDayofFirstDay)
+	f.Intrinsic.Math.Sub(v.Local.iWeekDayofFirstDay,1,v.Local.iHold)
+	f.Intrinsic.Math.Mult(v.Local.iHold,-1,v.Local.iHold)
+	f.Intrinsic.Date.DateAdd("D",v.Local.iHold,v.Local.dFirstDate,v.Local.dFirstWeek)
+	'Get difference	
+	f.Intrinsic.Date.DateDiff("W",v.Local.dFirstWeek,v.Ambient.date,v.Local.iCurrentWeek)
+	f.Intrinsic.Math.Add(v.Local.iCurrentWeek,1,v.Local.iCurrentWeek)
+	f.Intrinsic.Variable.AddRV("iCurrentWeek",v.Local.iCurrentWeek) 	
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+		F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}","GCG_5072_Serial.g2u",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+		F.Intrinsic.Control.CallSub("Unload")
+	F.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.EndTry
+Program.Sub.Get_Current_Week_Number.End
+
+Program.Sub.Unload.Start
+F.Intrinsic.Control.Try
+	V.Local.sError.Declare
+
+	F.Intrinsic.Control.If(V.ODBC.Connection!Conx.State,=,1)
+		F.ODBC.Connection!Conx.Close
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.End	
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+		F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}","GCG_5072_Serial.g2u",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.EndTry
+Program.Sub.Unload.End
+
+Program.Sub.Generate_Serial_Number.Start
+F.Intrinsic.Control.Try
+	V.Local.sError.Declare
+	V.Local.iCnt.Declare
+	V.Local.sSql.Declare
+	V.Local.sRet.Declare
+	V.Local.sSerial.Declare
+	V.Local.sWO.Declare
+	V.Local.sSuffix.Declare
+	v.Local.sPart.Declare
+	v.Local.sLocation.Declare
+	v.Local.sSupplierCode.Declare
+	v.Local.sCurrentWeek.Declare
+	v.Local.sCurrentYear.Declare
+	v.Local.iCurrentYear.Declare
+	v.Local.iCurrentCounter.Declare
+	v.Local.sCurrentCounter.Declare
+	
+	'Set WO and Suffix
+	V.Local.sWO.Set(V.Passed.009000)
+	V.Local.sSuffix.Set(V.Passed.009001)	
+	
+	'query to see if the company option to attach manual serial numbers is turned on, if it is not, end the program.
+	F.Intrinsic.String.Build("select F_BOOLEAN from V_OP_HEADER where ID = '{0}'","401137",v.Local.sSql)
+	F.ODBC.Connection!Conx.ExecuteAndReturn(v.Local.sSql,v.Local.sRet)
+	F.Intrinsic.Control.If(v.Local.sRet.Trim,=,"0")
+		F.Intrinsic.UI.Msgbox("The company option to allow manual serial numbers is not activated.")
+		F.Intrinsic.Control.CallSub("Unload")		
+	F.Intrinsic.Control.EndIf
+
+	'Get Part,Location
+	f.Intrinsic.String.Build("Select Part,Location from V_Job_Header where Job = '{0}' and Suffix = '{1}'",V.Local.sWO,V.Local.sSuffix,V.Local.sSql)
+	f.ODBC.Connection!conx.ExecuteAndReturn(v.Local.sSql,v.Local.sRet)
+	f.Intrinsic.Control.If(v.Local.sRet,=,"")	
+		f.Intrinsic.Control.CallSub("Lock_Screen")
+		f.Intrinsic.UI.Msgbox("The Part is not not found from Job_Header. No Serial Number is generated.","Attention")
+		F.Intrinsic.Control.CallSub("Unload")		
+	f.Intrinsic.Control.EndIf	
+
+	'Set Part,Location
+	f.Intrinsic.String.Split(v.Local.sRet,"*!*",v.Local.sRet)
+	v.Local.sPart.Set(v.Local.sRet(0))
+	v.Local.sLocation.Set(v.Local.sRet(1))
+
+	'Check if Part is flagged Serialize
+	f.Intrinsic.String.Build("Select flag_serialize from Inventory_MSTR where Part = '{0}' and Location = '{1}'",V.Local.sPart.PSQLFriendly,V.Local.sLocation,V.Local.sSql)
+	f.ODBC.Connection!Conx.ExecuteAndReturn(v.Local.sSql,v.Local.sRet)
+	f.Intrinsic.Control.If(v.Local.sRet,<>,"Y")					
+		f.Intrinsic.Control.CallSub("Lock_Screen") 
+		f.Intrinsic.UI.Msgbox("The Part is not flagged as Serialize in Inventory Master. No Serial Number is generated.","Attention")
+		f.Intrinsic.Control.CallSub("Unload")
+	f.Intrinsic.Control.EndIf		
+
+	'Now Part is found and flagged with Serialize, get Inventory Master User 1 as Supplier Code
+	f.Intrinsic.String.Build("Select Text_Info1 from Inventory_Mst2 where Part = '{0}' and Location ='{1}'",v.Local.sPart.PSQLFriendly,v.Local.sLocation,v.Local.sSql)
+	f.ODBC.Connection!conx.ExecuteAndReturn(v.Local.sSQL,v.Local.sRet)
+	f.Intrinsic.Control.If(v.Local.sRet,=,"")
+		f.Intrinsic.Control.CallSub("Lock_Screen") 
+		f.Intrinsic.UI.Msgbox("The User Field 1 from Inventory Master is not setup as Supplier Code. No Serial Number is generated.","Attention")
+		f.Intrinsic.Control.CallSub("Unload")			
+	f.Intrinsic.Control.EndIf
+
+	'Set Supplier Code
+	v.Local.sRet.Set(v.Local.sRet.Trim)
+	v.Local.sSupplierCode.Set(v.Local.sRet.left7)
+	f.Intrinsic.Control.If(v.Local.sSupplierCode.Length,<>,7)
+		f.Intrinsic.Control.CallSub("Lock_Screen") 
+		f.Intrinsic.UI.Msgbox("The User Field 1 from Inventory Master is not in 7 chars format. No Serial Number is generated.","Attention")
+		f.Intrinsic.Control.CallSub("Unload")					
+	f.Intrinsic.Control.EndIf	
+	
+	'Loads name of BDF and ID into memory
+	f.Intrinsic.UI.InvokeWaitDialog("Generating Serial Numbers...")
+	Function.Intrinsic.BDF.Load("AUX001","AUX001")		
+	
+	'Get current week
+	f.Intrinsic.Control.CallSub("Get_Current_Week_Number")
+	f.Intrinsic.String.LPad(v.Args.iCurrentWeek,"0",2,v.Local.sCurrentWeek)
+	v.Local.sCurrentYear.Set(v.Ambient.Date.FormatYYYYMMDD)
+	f.Intrinsic.String.Mid(v.Local.sCurrentYear,3,2,v.Local.sCurrentYear)
+	
+	'We have to touch data base each loop, just to make sure that other user may increment the counter
+	F.Intrinsic.Control.For(V.Local.iCnt,1,V.Passed.000026.Long,1)
+		'Get CurrentCounter
+		f.Intrinsic.String.Build("Select Top 1 CurrentCounter from GCG_5685_Serial where SupplierCode = '{0}' and CurrentYear = '{1}' and CurrentWeek = '{2}' order by CurrentCounter desc",v.Local.sSupplierCode,v.Local.sCurrentYear,v.Local.sCurrentWeek,v.Local.sSql)
+		F.ODBC.Connection!Conx.ExecuteAndReturn(V.Local.sSql,V.Local.sRet)
+		f.Intrinsic.Control.If(v.Local.sRet,=,"")
+			v.Local.sCurrentCounter.Set("0001")		
+			'Write back new current counter
+			f.Intrinsic.String.Build("Insert into GCG_5685_Serial (SupplierCode,CurrentYear,CurrentWeek,CurrentCounter) values('{0}','{1}','{2}','{3}')",v.Local.sSupplierCode,v.Local.sCurrentYear,v.Local.sCurrentWeek,v.Local.sCurrentCounter,v.Local.sSQL)
+			F.ODBC.Connection!Conx.Execute(V.Local.sSql)			
+		f.Intrinsic.Control.Else	
+			v.Local.iCurrentCounter.Set(v.Local.sRet)
+			f.Intrinsic.Control.If(v.Local.iCurrentCounter,=,9999)
+				f.Intrinsic.UI.Msgbox("Counter for the current week has reached 9999. Please contact administrator for help.","Attention")
+				f.Intrinsic.Control.CallSub("Unload")
+			f.Intrinsic.Control.EndIf
+			f.Intrinsic.Math.Add(v.Local.iCurrentCounter,1,v.Local.iCurrentCounter)
+			f.Intrinsic.String.LPad(v.Local.iCurrentCounter,"0",4,v.Local.sCurrentCounter)
+			'Write back new current counter
+			f.Intrinsic.String.Build("Update GCG_5685_Serial set CurrentCounter = '{0}' where SupplierCode = '{1}' and CurrentYear = '{2}' and CurrentWeek = '{3}'",v.Local.sCurrentCounter,v.Local.sSupplierCode,v.Local.sCurrentYear,v.Local.sCurrentWeek,v.Local.sSql)
+			F.ODBC.Connection!Conx.Execute(V.Local.sSql)			
+		f.Intrinsic.Control.EndIf
+
+	
+		'Build Serial Number
+		f.Intrinsic.String.Build("{0}-{1}-{2}-{3}",v.Local.sSupplierCode,v.Local.sCurrentYear,v.Local.sCurrentWeek,v.Local.sCurrentCounter,v.Local.sSerial)
+		
+		F.Intrinsic.String.Build("{0}|~|",V.Local.sSerial,V.Local.sRet)
+		Function.Intrinsic.BDF.WriteRow("AUX001",V.Local.sRet)
+		
+		v.Passed.000027.Set(V.Passed.000026)
+	F.Intrinsic.Control.Next(V.Local.iCnt)
+
+	f.Intrinsic.Control.CallSub("Lock_Screen")			
+	Function.Intrinsic.BDF.Save("AUX001","AUX001")		
+	
+	f.Intrinsic.UI.CloseWaitDialog
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+		F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}","GCG_5072_Serial.g2u",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+		F.Intrinsic.Control.CallSub("Unload")
+	F.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.EndTry
+Program.Sub.Generate_Serial_Number.End
+
+Program.Sub.Lock_screen.Start
+f.Intrinsic.Control.Try	
+	v.Local.sError.Declare
+
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000082,"LOCK","1")
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000022,"LOCK","1")
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000023,"LOCK","1")
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000024,"LOCK","1")
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000025,"LOCK","1") 
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.AUX001,"LOCK","1") 
+	F.Intrinsic.UI.ChangeCallerProperty(v.Passed.000030,"LOCK","1") 	
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+		F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}","GCG_5072_Serial.g2u",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+		F.Intrinsic.UI.Msgbox(V.Local.sError)
+		F.Intrinsic.Control.CallSub("Unload")
+	F.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.EndTry
+Program.Sub.Lock_screen.End
+
+
